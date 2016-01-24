@@ -65,7 +65,7 @@ freedom <- do.call('rbind', word_freedom)
 freedom <- data.frame(word = rownames(freedom), freedom, row.names = NULL) %>% 
     arrange(desc(freedom))
 
-
+# stopCluster(cl)
 
 
 
