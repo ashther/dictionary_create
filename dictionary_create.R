@@ -3,12 +3,20 @@ library(dplyr)
 library(parallel)
 library(tm)
 
+stopwords_path <- 'C:/Program Files/R/R-3.2.2/library/jiebaRD/dict/stop_words.utf8'
+stopwords_cn <- readLines(file(stopwords_path, 'r'), encoding = 'utf-8') %>% 
+    iconv(from = 'utf-8', to = 'gbk') %>% 
+    `[`(119:868) %>% 
+    paste(collapse = '|')
+
 words <- readLines(file('Matthew.txt', 'r')) %>%
     paste0(collapse = '') %>%
     removePunctuation() %>%
     removeNumbers() %>%
     stripWhitespace() %>%
-    gsub(' ', '', .)
+    gsub('[a-zA-Z]', '', .) %>% 
+    gsub(' ', '', .) %>% 
+    gsub(stopwords_cn, '', .)
 
 cl <- makeCluster(4)
 
@@ -35,12 +43,12 @@ word_dic <- word_dic / n
 dic_names <- names(word_dic)
 
 clusterExport(cl, 'dic_names')
-clusterEvalQ(cl, library(magrittr))
-clusterEvalQ(cl, entropyCaculate <- function(vec) {
+invisible(clusterEvalQ(cl, library(magrittr)))
+invisible(clusterEvalQ(cl, entropyCaculate <- function(vec) {
     vec <- table(vec)
     p <- vec / sum(vec)
     sum(-p * log(p))
-})
+}))
 
   # 用户   系统   流逝 
   # 0.26   0.00 185.01 
