@@ -109,7 +109,7 @@ free_df <- data.frame(word = names(free), free = free,
 word_df <- inner_join(pmi_df, free_df, by = 'word')
 
 test <- word_df %>% 
-    filter(free > 0 & pmi > 0) %>% 
+    filter(free >= 0.001 & pmi >= 0) %>% 
     arrange(desc(pmi), desc(free))
 
 
