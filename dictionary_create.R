@@ -1,6 +1,7 @@
 library(jiebaR)
 library(dplyr)
 library(parallel)
+library(stringi)
 library(tm)
 
 stopwords_path <- 'C:/Program Files/R/R-3.2.2/library/jiebaRD/dict/stop_words.utf8'
@@ -9,14 +10,16 @@ stopwords_cn <- readLines(file(stopwords_path, 'r'), encoding = 'utf-8') %>%
     `[`(119:868) %>% 
     paste(collapse = '|')
 
-# words <- readLines(file('Matthew.txt', 'r')) %>%
-#     paste0(collapse = '') %>%
-#     removePunctuation() %>%
-#     removeNumbers() %>%
-#     stripWhitespace() %>%
-#     gsub('[a-zA-Z]', '', .) %>%
-#     gsub(' ', '', .) %>%
-#     gsub(stopwords_cn, '', .)
+# words <- '吃葡萄不吐葡萄皮不吃葡萄倒吐葡萄皮'
+
+words <- readLines(file('Matthew.txt', 'r')) %>%
+    paste0(collapse = '') %>%
+    removePunctuation() %>%
+    removeNumbers() %>%
+    stripWhitespace() %>%
+    gsub('[a-zA-Z]', '', .) %>%
+    gsub(' ', '', .) %>%
+    gsub(stopwords_cn, '', .)
 
 dicCreate <- function(words, thr_p = 0.01, thr_f = 0.01) {
     
@@ -46,6 +49,7 @@ dicCreate <- function(words, thr_p = 0.01, thr_f = 0.01) {
     
     clusterExport(cl, 'dic_names', environment())
     invisible(clusterEvalQ(cl, require(magrittr)))
+    invisible(clusterEvalQ(cl, require(stringi)))
     invisible(clusterEvalQ(cl, entropyCaculate <- function(vec) {
         vec <- table(vec)
         p <- vec / sum(vec)
@@ -54,9 +58,9 @@ dicCreate <- function(words, thr_p = 0.01, thr_f = 0.01) {
     
     print(sprintf('free start on %s', format(Sys.time(), '%M:%OS3')))
     system.time(free <- parSapply(cl, dic_names, function(w){
-        pos <- gregexpr(w, words, fixed = FALSE)[[1]]
-        pre <- substring(words, pos - 1, pos - 1) %>% entropyCaculate()
-        suff <- substring(words, pos + nchar(w), pos + nchar(w)) %>% entropyCaculate()
+        pos <- stri_locate_all(words, fixed = w)[[1]]
+        pre <- stri_sub(words, pos[, 1] - 1, length = 1) %>% entropyCaculate()
+        suff <- stri_sub(words, pos[, 2] + 1, length = 1) %>% entropyCaculate()
         return(min(pre, suff))
     }))
     print(sprintf('free finsh on %s', format(Sys.time(), '%M:%OS3')))
@@ -156,10 +160,7 @@ dateCopmpare <- function(words_1, words_2, n) {
 }
 
 
-
-
-
-
+big_words <- paste0(news$news[1:2], collapse = '')
 
 
 
