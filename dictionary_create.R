@@ -12,16 +12,16 @@ stopwords_cn <- readLines(file(stopwords_path, 'r'), encoding = 'utf-8') %>%
 
 # words <- '吃葡萄不吐葡萄皮不吃葡萄倒吐葡萄皮'
 
-words <- readLines(file('Matthew.txt', 'r')) %>%
-    paste0(collapse = '') %>%
-    removePunctuation() %>%
-    removeNumbers() %>%
-    stripWhitespace() %>%
-    gsub('[a-zA-Z]', '', .) %>%
-    gsub(' ', '', .) %>%
-    gsub(stopwords_cn, '', .)
+# words <- readLines(file('Matthew.txt', 'r')) %>%
+#     paste0(collapse = '') %>%
+#     removePunctuation() %>%
+#     removeNumbers() %>%
+#     stripWhitespace() %>%
+#     gsub('[a-zA-Z]', '', .) %>%
+#     gsub(' ', '', .) %>%
+#     gsub(stopwords_cn, '', .)
 
-dicCreate <- function(words, thr_p = 0.01, thr_f = 0.01) {
+dicCreate <- function(words, thr_p = 0, thr_f = 0) {
     
     cl <- makeCluster(4)
     
@@ -95,7 +95,7 @@ dicCreate <- function(words, thr_p = 0.01, thr_f = 0.01) {
     word_df <- inner_join(pmi_df, free_df, by = 'word')
     
     test <- word_df %>% 
-        filter(free >= thr_f & pmi >= thr_p) %>% 
+        filter(free > thr_f & pmi > thr_p) %>% 
         mutate(freq = as.vector(word_freq[as.character(word)])) %>% 
         arrange(desc(pmi), desc(free))
     
@@ -160,7 +160,7 @@ dateCopmpare <- function(words_1, words_2, n) {
 }
 
 
-big_words <- paste0(news$news[1:2], collapse = '')
+# big_words <- paste0(news$news[1:2], collapse = '')
 
 
 
