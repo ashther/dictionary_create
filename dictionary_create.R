@@ -1,184 +1,159 @@
-library(jiebaR)
 library(dplyr)
-library(parallel)
-library(stringi)
-library(tm)
+data_path <- 'data/Matthew.txt'
+stopwords_path <- 'dict/stop_words.utf8'
 
-stopwords_path <- 'C:/Program Files/R/R-3.2.2/library/jiebaRD/dict/stop_words.utf8'
-stopwords_cn <- readLines(file(stopwords_path, 'r'), encoding = 'utf-8') %>% 
-    iconv(from = 'utf-8', to = 'gbk') %>% 
-    `[`(119:868) %>% 
-    paste(collapse = '|')
+Rcpp::sourceCpp('entropyCaculateCpp.cpp')
 
-# words <- '吃葡萄不吐葡萄皮不吃葡萄倒吐葡萄皮'
-
-# words <- readLines(file('Matthew.txt', 'r')) %>%
-#     paste0(collapse = '') %>%
-#     removePunctuation() %>%
-#     removeNumbers() %>%
-#     stripWhitespace() %>%
-#     gsub('[a-zA-Z]', '', .) %>%
-#     gsub(' ', '', .) %>%
-#     gsub(stopwords_cn, '', .)
-
-dicCreate <- function(words, thr_p = 0, thr_f = 0) {
-    
-    cl <- makeCluster(4)
-    
-    n <- nchar(words)
-
-    st <- 1:n
-
-    clusterExport(cl, 'words', environment())
-    clusterExport(cl, 'st', environment())
-    
-    # seg_words
-    print(sprintf('seg_words start on %s', format(Sys.time(), '%M:%OS3')))
-    system.time(seg_words <- parSapply(cl, 0:4, function(i){
-        substring(words, st, i + st)
-    }))
-    print(sprintf('seg_words finish on %s', format(Sys.time(), '%M:%OS3')))
-    
-    # word_dic
-    print(sprintf('word_freq start on %s', format(Sys.time(), '%M:%OS3')))
-    system.time(word_freq <- table(unlist(seg_words)))
-    print(sprintf('word_freq finish on %s', format(Sys.time(), '%M:%OS3')))
-    rm(seg_words)
-    word_dic <- word_freq / n
-    dic_names <- names(word_dic)
-    
-    clusterExport(cl, 'dic_names', environment())
-    invisible(clusterEvalQ(cl, require(magrittr)))
-    invisible(clusterEvalQ(cl, require(stringi)))
-    invisible(clusterEvalQ(cl, entropyCaculate <- function(vec) {
-        vec <- table(vec)
-        p <- vec / sum(vec)
-        sum(-p * log(p))
-    }))
-    
-    print(sprintf('free start on %s', format(Sys.time(), '%M:%OS3')))
-    system.time(free <- parSapply(cl, dic_names, function(w){
-        pos <- stri_locate_all(words, fixed = w)[[1]]
-        pre <- stri_sub(words, pos[, 1] - 1, length = 1) %>% entropyCaculate()
-        suff <- stri_sub(words, pos[, 2] + 1, length = 1) %>% entropyCaculate()
-        return(min(pre, suff))
-    }))
-    print(sprintf('free finsh on %s', format(Sys.time(), '%M:%OS3')))
-    
-    stopCluster(cl)
-    
-    pmi <- word_dic
-    
-    test <- dic_names[nchar(dic_names) == 2]
-    pmi[test] <- word_dic[substr(test, 1, 1)] * word_dic[substr(test, 2, 2)]
-    
-    test <- dic_names[nchar(dic_names) == 3]
-    pmi[test] <- pmax(word_dic[substring(test, 1, 1)] * word_dic[substring(test, 2, 3)], 
-                      word_dic[substring(test, 1, 2)] * word_dic[substring(test, 3, 3)])
-    
-    test <- dic_names[nchar(dic_names) == 4]
-    pmi[test] <- pmax(word_dic[substring(test, 1, 1)] * word_dic[substring(test, 2, 4)], 
-                      word_dic[substring(test, 1, 2)] * word_dic[substring(test, 3, 4)], 
-                      word_dic[substring(test, 1, 3)] * word_dic[substring(test, 4, 4)])
-    
-    test <- dic_names[nchar(dic_names) == 5]
-    pmi[test] <- pmax(word_dic[substring(test, 1, 1)] * word_dic[substring(test, 2, 5)], 
-                      word_dic[substring(test, 1, 2)] * word_dic[substring(test, 3, 5)], 
-                      word_dic[substring(test, 1, 3)] * word_dic[substring(test, 4, 5)], 
-                      word_dic[substring(test, 1, 4)] * word_dic[substring(test, 5, 5)])
-    
-    pmi <- log(word_dic / pmi)
-    
-    pmi_df <- data.frame(word = names(pmi), pmi = as.vector(pmi), stringsAsFactors = FALSE)
-    free_df <- data.frame(word = names(free), free = free, 
-                          row.names = NULL, stringsAsFactors = FALSE)
-    word_df <- inner_join(pmi_df, free_df, by = 'word')
-    
-    test <- word_df %>% 
-        filter(free > thr_f & pmi > thr_p) %>% 
-        mutate(freq = as.vector(word_freq[as.character(word)])) %>% 
-        arrange(desc(pmi), desc(free))
-    
-    return(test)
+wordsPrepare <- function(data_path, stopwords_path) {
+  require(magrittr)
+  require(stringi)
+  stopwords_cn <- stri_read_lines(stopwords_path) %>% 
+    `[`(156:877) %>% 
+    stri_c(collapse = '|')
+  stopwords_cn <- stri_c(stopwords_cn, '|的|了')
+  
+  stri_read_lines(data_path) %>%
+    stri_c(collapse = '') %>% 
+    stri_replace_all('', regex = '[\\W[:punct:][:space:]0-9a-zA-Z]')
+    # stri_replace_all('', regex = stopwords_cn)
 }
 
-# clusterExport(cl, 'word_dic')
-# system.time(pmi <- parSapply(cl, dic_names, function(w){
-#     n <- nchar(w)
-#     if (n == 1) {
-#         return(0) # single word mutual information is 1?
-#     } else {
-#         
-#         left <- substring(w, 1, 1:(n - 1))
-#         right <- substring(w, 2:n, n)
-#         
-#         return(mapply(function(x, y){
-#             log(word_dic[w] / (word_dic[x] * word_dic[y]))
-#             }, left, right) %>% min())
-#     }
-# }))
-
-
-
-
-
-words <- readLines(file('199801.txt', 'r'))
-words <- words[nchar(words) != 0]
-date <- substring(words, 1, 8)
-content <- substring(words, 23)
-news <- data.frame(list(date = date, content = content), stringsAsFactors = FALSE) %>% 
-    group_by(date) %>% 
-    summarise(news = paste0(content, collapse = '')) %>% 
-    ungroup()
-rm(content)
-
-news$news <- news$news %>% 
-    removePunctuation() %>% 
-    removeNumbers() %>% 
-    stripWhitespace() %>% 
-    gsub('[a-zA-Z]', '', .) %>% 
-    gsub(' ', '', .) %>% 
-    gsub(stopwords_cn, '', .)
-
-dateCopmpare <- function(words_1, words_2, n) {
-    words_1 <- dicCreate(words_1)
-    words_2 <- dicCreate(words_2)
-    
-    temp <- left_join(words_1, words_2, by = 'word') %>% 
-        select(word, f2 = freq.x, f1 = freq.y)
-    temp[is.na(temp)] <- 0
-    temp <- mutate(temp, f = f1 + f2, prob = f2 / f)
-    
-    avg_f <- mean(temp$f)
-    avg_prob <- mean(temp$prob)
-    
-    result <- mutate(temp, rating = (f * prob + avg_f * avg_prob) / (f + avg_f)) %>% 
-        arrange(desc(rating)) %>% 
-        top_n(n, rating)
-    
-    return(result)
+entropyCaculate <- function(vec) {
+  vec <- table(vec)
+  p <- vec / sum(vec)
+  sum(-p * log(p))
 }
 
+dicCreate <- function(words) {
+  require(data.table)
+  require(dplyr)
+  require(tibble)
+  require(stringi)
+  require(stringr)
+  n <- nchar(words)
+  st <- 1:n
+  print(sprintf('segment start on %s', format(Sys.time(), '%M:%OS3')))
+  seg_words <- lapply(0:4, function(i){
+    stri_sub(words, st, i + st)
+  })
+  print(sprintf('segment finish on %s', format(Sys.time(), '%M:%OS3')))
+  
+  print(sprintf('word_free start on %s', format(Sys.time(), '%M:%OS3')))
+  word_free <- rbindlist(lapply(unique(seg_words[[1]]), function(x) {
+    idx <- which(seg_words[[1]] == x)
+    pre_idx <- idx - 1
+    suff_idx <- idx + 1
+    pre <- seg_words[[1]][ifelse(pre_idx < 1, 1, pre_idx)]
+    suff <- seg_words[[1]][ifelse(suff_idx > n, n, suff_idx)]
+    data.table(w = x, 
+               pre = entropyCaculateCpp(pre), 
+               suff = entropyCaculateCpp(suff))
+  }))
+  print(sprintf('word_free finish on %s', format(Sys.time(), '%M:%OS3')))
+  
+  print(sprintf('free start on %s', format(Sys.time(), '%M:%OS3')))
+  word_freq_dt <- as.data.table(unlist(seg_words))[, .(freq = .N/n), V1]
+  colnames(word_freq_dt)[1] <- 'word'
+  setkeyv(word_freq_dt, 'word')
+  
+  word_freq_dt[, w := str_sub(word, 1, 1)]
+  word_freq_dt[word_free, pre := i.pre, on = 'w']
+  word_freq_dt[, w := str_sub(word, -1, -1)]
+  word_freq_dt[word_free, suff := i.suff, on = 'w']
+  word_freq_dt[, free := pmin(pre, suff)]
+  print(sprintf('free finish on %s', format(Sys.time(), '%M:%OS3')))
+  
+  print(sprintf('pmi start on %s', format(Sys.time(), '%M:%OS3')))
+  pmi <- rep(0, nrow(word_freq_dt))
+  names(pmi) <- word_freq_dt$word
+  
+  test <- word_freq_dt[nchar(word) == 2, word]
+  pmi[test] <- word_freq_dt[stri_sub(test, from = 1, length = 1), freq] * 
+                word_freq_dt[stri_sub(test, from = -1, length = 1), freq]
+  
+  test <- word_freq_dt[nchar(word) == 3, word]
+  pmi[test] <- pmax(word_freq_dt[stri_sub(test, from = 1, length = 1), freq] * 
+                      word_freq_dt[stri_sub(test, from = -1, length = 2), freq], 
+                    word_freq_dt[stri_sub(test, from = 1, length = 2), freq] * 
+                      word_freq_dt[stri_sub(test, from = -1, length = 1), freq])
+  
+  test <- word_freq_dt[nchar(word) == 4, word]
+  pmi[test] <- pmax(word_freq_dt[stri_sub(test, from = 1, length = 1), freq] * 
+                      word_freq_dt[stri_sub(test, from = -1, length = 3), freq], 
+                    word_freq_dt[stri_sub(test, from = 1, length = 2), freq] * 
+                      word_freq_dt[stri_sub(test, from = -1, length = 2), freq], 
+                    word_freq_dt[stri_sub(test, from = 1, length = 3), freq] * 
+                      word_freq_dt[stri_sub(test, from = -1, length = 1), freq])
+  
+  test <- word_freq_dt[nchar(word) == 5, word]
+  pmi[test] <- pmax(word_freq_dt[stri_sub(test, from = 1, length = 1), freq] * 
+                      word_freq_dt[stri_sub(test, from = -1, length = 4), freq], 
+                    word_freq_dt[stri_sub(test, from = 1, length = 2), freq] * 
+                      word_freq_dt[stri_sub(test, from = -1, length = 3), freq], 
+                    word_freq_dt[stri_sub(test, from = 1, length = 3), freq] * 
+                      word_freq_dt[stri_sub(test, from = -1, length = 2), freq], 
+                    word_freq_dt[stri_sub(test, from = 1, length = 4), freq] * 
+                      word_freq_dt[stri_sub(test, from = -1, length = 1), freq])
+  
+  pmi <- ifelse(pmi == 0, 0, log(word_freq_dt$freq / pmi))
+  print(sprintf('pmi finish on %s', format(Sys.time(), '%M:%OS3')))
+  
+  pmi_df <- as.data.table(enframe(pmi, 'word', 'pmi'))
+  
+  word_freq_dt[
+    , f := as.numeric(scale(free)) + as.numeric(scale(pmi))
+  ][order(-f)]
+}
 
-# big_words <- paste0(news$news[1:2], collapse = '')
+words <- dataGetFromSQLite(
+  'e:/work/meta.db', 
+  sql = 'select episode, scene, section, word from episode_word where stopWord == 0 and symbol == 0 and word <> "";'
+)
 
+words_section <- dataGetFromSQLite(
+  'e:/work/meta.db', 
+  sql = 'select episode, scene, section, content from episode_section;'
+)
 
+words_for_dict <- wordsPrepare('words_section.txt', 'dict/stop_words.utf8')
+words_for_dict_len <- nchar(words_for_dict)
+words_dict <- dicCreate(words_for_dict)
 
+words_0 <- words_dict %>% 
+  filter(free > 0 & pmi > 0 & nchar(word) > 1) %>% 
+  mutate(f = as.numeric(scale(pmi)) + as.numeric(scale(free))) %>% 
+  filter(f > 0) %>% 
+  filter(f > quantile(.$f, 0.8))
 
+words_1 <- dicCreate(stri_sub(words_for_dict, from = 1, 
+                                 length = floor(words_for_dict_len/4))) %>% 
+  filter(free > 0 & pmi > 0 & nchar(word) > 1) %>% 
+  mutate(f = as.numeric(scale(pmi)) + as.numeric(scale(free))) %>% 
+  filter(f > 0) %>% 
+  filter(f > quantile(.$f, 0.9))
+test <- left_join(select(words_1, word, freq), 
+                  select(words_0, word, freq), by = 'word')
+temp <- (test$freq.x + mean(test$freq.x, na.rm = TRUE)) /
+  (test$freq.y + mean(test$freq.y, na.rm = TRUE))
+test %>% add_column(temp) %>% arrange(-temp) %>% head(30) %>% as.data.frame()
 
+words_2 <- dicCreate(stri_sub(words_for_dict, from = floor(words_for_dict_len/4) * 1, 
+                              length = floor(words_for_dict_len/4))) %>% 
+  filter(free > 0 & pmi > 0 & nchar(word) > 1) %>% 
+  mutate(f = as.numeric(scale(pmi)) + as.numeric(scale(free))) %>% 
+  filter(f > 0) %>% 
+  filter(f > quantile(.$f, 0.9))
 
+words_3 <- dicCreate(stri_sub(words_for_dict, from = floor(words_for_dict_len/4) * 2, 
+                              length = floor(words_for_dict_len/4))) %>% 
+  filter(free > 0 & pmi > 0 & nchar(word) > 1) %>% 
+  mutate(f = as.numeric(scale(pmi)) + as.numeric(scale(free))) %>% 
+  filter(f > 0) %>% 
+  filter(f > quantile(.$f, 0.9))
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+words_4 <- dicCreate(stri_sub(words_for_dict, from = floor(words_for_dict_len/4) * 3, 
+                              length = floor(words_for_dict_len/4))) %>% 
+  filter(free > 0 & pmi > 0 & nchar(word) > 1) %>% 
+  mutate(f = as.numeric(scale(pmi)) + as.numeric(scale(free))) %>% 
+  filter(f > 0) %>% 
+  filter(f > quantile(.$f, 0.9))
