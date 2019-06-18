@@ -1,8 +1,9 @@
-library(dplyr)
+require(data.table)
+require(stringi)
 data_path <- 'data/Matthew.txt'
 stopwords_path <- 'dict/stop_words.utf8'
 
-Rcpp::sourceCpp('entropyCaculateCpp.cpp')
+Rcpp::sourceCpp('entropyCaculate.cpp')
 
 wordsPrepare <- function(data_path, stopwords_path) {
   require(magrittr)
@@ -18,92 +19,74 @@ wordsPrepare <- function(data_path, stopwords_path) {
     # stri_replace_all('', regex = stopwords_cn)
 }
 
-entropyCaculate <- function(vec) {
-  vec <- table(vec)
-  p <- vec / sum(vec)
-  sum(-p * log(p))
+# entropyCaculate <- function(vec) {
+#   vec <- table(vec)
+#   p <- vec / sum(vec)
+#   sum(-p * log(p))
+# }
+
+expr_paste <- function(n) {
+  left <- seq_len(n - 1)
+  right <- rev(left)
+  template <- 'word_freq_dt[stri_sub(word_names, from = 1, length = %s), freq] * word_freq_dt[stri_sub(word_names, from = -1, length = %s), freq]'
+  paste0('pmax(', paste(sprintf(template, left, right), collapse = ', '), ')')
 }
 
-dicCreate <- function(words) {
-  require(data.table)
-  require(dplyr)
-  require(tibble)
-  require(stringi)
-  require(stringr)
-  n <- nchar(words)
+word_find <- function(string_long, max_len = 5L, min_freq = 5e-05) {
+  
+  # segment long strings into segment
+  n <- nchar(string_long)
   st <- 1:n
-  print(sprintf('segment start on %s', format(Sys.time(), '%M:%OS3')))
-  seg_words <- lapply(0:4, function(i){
-    stri_sub(words, st, i + st)
+  seg_words <- lapply(0:(max_len - 1), function(i){
+    stri_sub(string_long, st, i + st)
   })
-  print(sprintf('segment finish on %s', format(Sys.time(), '%M:%OS3')))
   
-  print(sprintf('word_free start on %s', format(Sys.time(), '%M:%OS3')))
-  word_free <- rbindlist(lapply(unique(seg_words[[1]]), function(x) {
-    idx <- which(seg_words[[1]] == x)
-    pre_idx <- idx - 1
-    suff_idx <- idx + 1
-    pre <- seg_words[[1]][ifelse(pre_idx < 1, 1, pre_idx)]
-    suff <- seg_words[[1]][ifelse(suff_idx > n, n, suff_idx)]
-    data.table(w = x, 
-               pre = entropyCaculateCpp(pre), 
-               suff = entropyCaculateCpp(suff))
+  # count words frequency
+  word_freq_dt <- as.data.table(unlist(seg_words))[
+    , .(freq = .N/n), keyby = V1
+  ][freq >= min_freq]
+  setnames(word_freq_dt, 'V1', 'word')
+  
+  # left and right free degree
+  word_single <- seg_words[[1]]
+  word_single_with_freq <- word_freq_dt[nchar(word) == 1, word]
+  word_free <- rbindlist(lapply(word_single_with_freq, function(x) {
+    idx <- which(word_single == x)
+    pre <- word_single[idx - 1]
+    suff <- word_single[idx + 1]
+
+    list(
+      w    = x,
+      pre  = entropyCaculate(pre),
+      suff = entropyCaculate(suff)
+    )
   }))
-  print(sprintf('word_free finish on %s', format(Sys.time(), '%M:%OS3')))
+  # word_free <- as.data.table(entropyGet(word_single_with_freq, word_single))
+  setkey(word_free, w)
   
-  print(sprintf('free start on %s', format(Sys.time(), '%M:%OS3')))
-  word_freq_dt <- as.data.table(unlist(seg_words))[, .(freq = .N/n), V1]
-  colnames(word_freq_dt)[1] <- 'word'
-  setkeyv(word_freq_dt, 'word')
-  
-  word_freq_dt[, w := str_sub(word, 1, 1)]
+  word_freq_dt[, w := stri_sub(word, 1, 1)]
   word_freq_dt[word_free, pre := i.pre, on = 'w']
-  word_freq_dt[, w := str_sub(word, -1, -1)]
+  word_freq_dt[, w := stri_sub(word, -1, -1)]
   word_freq_dt[word_free, suff := i.suff, on = 'w']
   word_freq_dt[, free := pmin(pre, suff)]
-  print(sprintf('free finish on %s', format(Sys.time(), '%M:%OS3')))
   
-  print(sprintf('pmi start on %s', format(Sys.time(), '%M:%OS3')))
+  # single word pmi
   pmi <- rep(0, nrow(word_freq_dt))
   names(pmi) <- word_freq_dt$word
-  
-  test <- word_freq_dt[nchar(word) == 2, word]
-  pmi[test] <- word_freq_dt[stri_sub(test, from = 1, length = 1), freq] * 
-                word_freq_dt[stri_sub(test, from = -1, length = 1), freq]
-  
-  test <- word_freq_dt[nchar(word) == 3, word]
-  pmi[test] <- pmax(word_freq_dt[stri_sub(test, from = 1, length = 1), freq] * 
-                      word_freq_dt[stri_sub(test, from = -1, length = 2), freq], 
-                    word_freq_dt[stri_sub(test, from = 1, length = 2), freq] * 
-                      word_freq_dt[stri_sub(test, from = -1, length = 1), freq])
-  
-  test <- word_freq_dt[nchar(word) == 4, word]
-  pmi[test] <- pmax(word_freq_dt[stri_sub(test, from = 1, length = 1), freq] * 
-                      word_freq_dt[stri_sub(test, from = -1, length = 3), freq], 
-                    word_freq_dt[stri_sub(test, from = 1, length = 2), freq] * 
-                      word_freq_dt[stri_sub(test, from = -1, length = 2), freq], 
-                    word_freq_dt[stri_sub(test, from = 1, length = 3), freq] * 
-                      word_freq_dt[stri_sub(test, from = -1, length = 1), freq])
-  
-  test <- word_freq_dt[nchar(word) == 5, word]
-  pmi[test] <- pmax(word_freq_dt[stri_sub(test, from = 1, length = 1), freq] * 
-                      word_freq_dt[stri_sub(test, from = -1, length = 4), freq], 
-                    word_freq_dt[stri_sub(test, from = 1, length = 2), freq] * 
-                      word_freq_dt[stri_sub(test, from = -1, length = 3), freq], 
-                    word_freq_dt[stri_sub(test, from = 1, length = 3), freq] * 
-                      word_freq_dt[stri_sub(test, from = -1, length = 2), freq], 
-                    word_freq_dt[stri_sub(test, from = 1, length = 4), freq] * 
-                      word_freq_dt[stri_sub(test, from = -1, length = 1), freq])
-  
+  for (i in 2:max_len) {
+    word_names <- word_freq_dt[nchar(word) == i, word]
+    pmi[word_names] <- eval(parse(text = expr_paste(i)))
+  }
   pmi <- ifelse(pmi == 0, 0, log(word_freq_dt$freq / pmi))
-  print(sprintf('pmi finish on %s', format(Sys.time(), '%M:%OS3')))
   
-  pmi_df <- as.data.table(enframe(pmi, 'word', 'pmi'))
-  
+  # caculate f and sort based on f
   word_freq_dt[
     , f := as.numeric(scale(free)) + as.numeric(scale(pmi))
-  ][order(-f)]
+    ][order(-f)][
+      , .(word, f)
+    ]
 }
+
 
 words <- dataGetFromSQLite(
   'e:/work/meta.db', 
